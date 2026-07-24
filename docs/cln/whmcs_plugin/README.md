@@ -6,8 +6,8 @@ The plugin provides:
 
 * IP-based and key-based license provisioning, depending on the selected product
 * automatic license creation and termination
-* IP license migration when the service IP changes
-* deferred provisioning when a VPS receives its Dedicated IP after the order is accepted
+* IP license migration when the service IP changes for standalone products, module-backed addons, and configurable options
+* deferred provisioning for module-backed addons and configurable options when a VPS receives its Dedicated IP after the order is accepted
 * license and relation lists in the WHMCS admin area
 * a global policy that prevents the checkout or operator IP from being used as the server IP
 
@@ -16,13 +16,13 @@ The plugin provides:
 | Model | Use it when | Where the customer selects the license | IP source | If the IP is not available yet |
 | --- | --- | --- | --- | --- |
 | Standalone product | The license is the product being sold | A product in the WHMCS store | A required custom field or the service Dedicated IP | Module Create returns an error and the service remains `Pending` |
-| Product addon | The license is an optional extra for a VPS or hosting service | **Available Addons** during checkout | The parent service custom IP field or Dedicated IP | The parent service is not blocked; the addon waits and is retried after the parent receives an IP |
+| Module-backed product addon | The license is an optional extra for a VPS or hosting service | **Available Addons** during checkout | The parent service custom IP field or Dedicated IP | The parent service is not blocked; the addon waits and is retried after the parent receives an IP |
 | Configurable option | The customer chooses a license product or tier from a dropdown | **Configurable Options** during checkout | The parent service custom IP field or Dedicated IP | The parent service is not blocked; license provisioning waits for the IP |
-| Automatic product relation | Every order of a hosting product must include a particular license | The license is included automatically and is not selected separately | The parent service custom IP field or Dedicated IP | The parent service can be provisioned first; the related license waits for the IP |
-| Addon-trigger relation | An existing non-CloudLinux product addon must trigger a separate license product | The existing product addon during checkout | The parent service custom IP field or Dedicated IP | The related license service waits for the parent IP |
+| Product Relation (legacy workflow) | Every order of a hosting product must include a particular license | The license is included automatically and is not selected separately | A separate child license service | Parent-IP inheritance and deferred retry are not automatic; see [Legacy relation workflows](#legacy-relation-workflows) |
+| Addon Relation (legacy workflow) | An existing non-CloudLinux product addon must trigger a separate license product | The existing product addon during checkout | A separate child license service | Parent-IP inheritance and deferred retry are not automatic; see [Legacy relation workflows](#legacy-relation-workflows) |
 
 ::: tip Recommended models
-Use a required custom IP field for a standalone IP-based license. Use deferred provisioning for a VPS whose Dedicated IP is assigned by the provisioning system after checkout.
+Use a required custom IP field for a standalone IP-based license. Use a module-backed product addon or configurable option for a VPS whose Dedicated IP is assigned by the provisioning system after checkout.
 :::
 
 ## Supported license products
@@ -84,7 +84,7 @@ Do not deactivate the addon as part of a normal update. Copy the new files over 
 The installation contains two cooperating WHMCS modules:
 
 * `CloudLinuxLicenses` is the server module attached to a product or product addon. It creates, changes, suspends, unsuspends, and terminates an individual CLN license.
-* **CloudLinux Licenses Addon** is the addon module that provides the administration page and registers the WHMCS lifecycle hooks. It manages relations between non-CloudLinux services and license products, follows parent-service IP changes, and cleans up related licenses when orders or services are removed.
+* **CloudLinux Licenses Addon** is the addon module that provides the administration page and registers the WHMCS lifecycle hooks. It manages relations between non-CloudLinux services and license products. For module-backed addons and configurable options, it also reconciles deferred provisioning, follows parent-service IP changes, and cleans up tracked licenses when services are removed.
 
 The addon module must remain active for Product Relations, Addon Relations, Configurable Options Relations, deferred provisioning, and automatic parent/child lifecycle handling to work.
 
@@ -100,24 +100,53 @@ Open **Addons → CloudLinux Licenses Addon**. The page contains five tabs:
 | --- | --- |
 | **Licenses List** | Standalone licenses and license products created through Product, Addon, or Configurable Options Relations |
 | **Addon Licenses List** | Licenses stored directly on product addons whose Module Name is `CloudLinuxLicenses` |
-| **Addon Relations** | Maps an existing non-CloudLinux product addon to a hidden CloudLinux license product |
-| **Product Relations** | Maps a parent hosting product to a license product that must be included automatically |
+| **Addon Relations** | Legacy workflow that maps an existing non-CloudLinux product addon to a hidden CloudLinux license product |
+| **Product Relations** | Legacy relation workflow that automatically includes a hidden license product with a parent hosting product |
 | **Configurable Options Relations** | Maps individual dropdown, radio, or checkbox values to hidden license products |
 
 The list tabs support filtering by client, product or addon, IP address, and license key. Relation rows can be added, edited, and deleted from the corresponding relation tab.
 
-### Two product-addon workflows
+### Module-backed and legacy product-addon workflows
 
 There are two different ways to use a WHMCS product addon:
 
 1. **Module-backed addon — recommended for current WHMCS versions.** Set the product addon's **Module Name** directly to `CloudLinuxLicenses` and configure its CLN product. The license belongs to the addon service itself and appears in **Addon Licenses List**. This is the workflow described in [Scenario 2](#scenario-2-optional-product-addon).
-2. **Addon-trigger relation.** Keep the existing product addon independent of the CloudLinux module, create a separate hidden `CloudLinuxLicenses` product, and map the two under **Addon Relations**. Activating the addon creates a separate child license service, which appears in **Licenses List**.
+2. **Addon Relation — legacy compatibility workflow.** Keep the existing product addon independent of the CloudLinux module, create a separate hidden `CloudLinuxLicenses` product, and map the two under **Addon Relations**. Activating the addon creates a separate child license service, which appears in **Licenses List**.
 
 Use an Addon Relation when an existing addon must remain independent or when compatibility with an older configuration is required. Do not configure the same addon as module-backed and also map it through Addon Relations, because these are separate provisioning models.
 
 ![CloudLinux addon relation](/images/cln/whmcs_plugin/addon-relations.webp)
 
-### Automatic Product Relations
+## Legacy relation workflows
+
+**Product Relations** and **Addon Relations** are retained for compatibility with installations that use the plugin's older child-service architecture. Both workflows create a separate free child service for the linked license product and record its relationship with the parent service.
+
+::: warning Legacy workflow limitations
+In version 1.3.23, Product Relations and Addon Relations do not provide the same deferred IP provisioning and parent-IP synchronization implemented for module-backed product addons and configurable options.
+
+For an IP-based license:
+
+* enable **Do not use Order IP** on the hidden license product so an automatic provisioning attempt cannot register the checkout or operator IP;
+* a related license may not be provisioned automatically when the parent receives its Dedicated IP later;
+* changing the parent service IP does not automatically move the related license to the new address;
+* before canceling or deleting an order, run the related license service's **Terminate** action and verify in CLN that the license was removed.
+
+Use a module-backed product addon or configurable option when the server IP can be assigned or changed after checkout.
+:::
+
+### Addon Relations
+
+Use **Addon Relations** only when an existing regular product addon must remain independent of the `CloudLinuxLicenses` provisioning module:
+
+1. Create and configure a hidden `CloudLinuxLicenses` product for the license.
+2. Open **Addons → CloudLinux Licenses Addon → Addon Relations**.
+3. Click **Add Relation**.
+4. Select the existing regular addon under **Product Addon** and the hidden license product under **Linked License Product**.
+5. Save the relation.
+
+Activating the regular addon creates a separate free child service for the linked license product. For current WHMCS versions, prefer a module-backed product addon unless compatibility with an existing relation-based configuration is required.
+
+### Product Relations
 
 Use **Product Relations** when every instance of a VPS or hosting product must include a license without asking the customer to select it:
 
@@ -128,6 +157,8 @@ Use **Product Relations** when every instance of a VPS or hosting product must i
 5. Save the relation.
 
 The related license product is created as a free child service. Include its commercial cost in the parent product instead of pricing the hidden license product separately.
+
+For an IP-based related license, enable **Do not use Order IP** on the hidden license product. After WHMCS creates the child license service, enter the correct server IP on that child and run its **Create** module action. If the parent IP changes later, update the related license service separately.
 
 ![CloudLinux product relation](/images/cln/whmcs_plugin/product-relations.webp)
 
@@ -142,7 +173,9 @@ For a service using `CloudLinuxLicenses`, the WHMCS administrator can:
 
 For key-based licenses, suspend and unsuspend do not remove or recreate the key. In the client area, the customer can view the license details and change the registered IP or key for an active service.
 
-Related licenses follow the parent lifecycle. An IP change on the parent moves its active IP-based addon and configurable-option licenses to the new address. Canceling or deleting an order terminates the licenses tracked through its relations. Hard-deleting a parent service also cleans up tracked module-backed addon and configurable-option licenses.
+Module-backed addon and configurable-option licenses participate in deferred provisioning and follow parent-service IP changes. Their stored License IP is updated after a successful move. Hard-deleting a parent service also cleans up tracked module-backed addon and configurable-option licenses.
+
+Product Relation child services receive suspend, unsuspend, and terminate actions when the corresponding module action runs for the parent service. An Addon Relation child is terminated when the mapped regular addon is terminated. These child services do not participate in automatic parent-IP reconciliation. Follow the operational precautions in [Legacy relation workflows](#legacy-relation-workflows) before canceling or deleting an order.
 
 ## Connect a product to CLN
 
@@ -340,15 +373,15 @@ If the **Bundle** list is empty or CLN rejects bundle provisioning, verify that 
 
 ## Provisioning behavior reference
 
-| Event | Standalone product | Addon or configurable option |
-| --- | --- | --- |
-| Real IP is available | The license is created during Module Create | The license is created when the relation or addon is activated |
-| Real IP is missing and Order IP is disabled | Module Create fails clearly; service stays `Pending` | Parent service is not blocked; license waits for the parent IP |
-| IP becomes available later | Enter the IP and run **Create** again | Save or finish provisioning the active parent service; the module reconciles automatically |
-| Registered IP changes | The old registration is removed and the new one is created | Related IP licenses follow the parent IP and their stored License IP is updated |
-| IP-based service is suspended or unsuspended | The corresponding CLN action is executed | The corresponding module action is executed for the license service |
-| License service is terminated | The registered IP or key is removed from CLN | The related license is removed when its service or selection is terminated |
-| Parent service is hard-deleted | Not applicable | Tracked addon and configurable-option licenses are cleaned up |
+| Event | Standalone product | Module-backed addon or configurable option | Product Relation or Addon Relation |
+| --- | --- | --- | --- |
+| Real IP is available | The license is created during Module Create | The license is created when the option or addon is activated | A child license service is created; verify that it contains the correct server IP before running **Create** |
+| Real IP is missing and Order IP is disabled | Module Create fails clearly; service stays `Pending` | Parent service is not blocked; license waits for the parent IP | No automatic relation-specific retry; provide the IP on the child license service and run **Create** |
+| IP becomes available later | Enter the IP and run **Create** again | Save or finish provisioning the active parent service; the module reconciles automatically | Update the child license service and run **Create** manually |
+| Registered IP changes | The old registration is removed and the new one is created | IP-based licenses follow the parent IP and their stored License IP is updated | Update the related license service separately; parent-IP changes are not reconciled automatically |
+| IP-based service is suspended or unsuspended | The corresponding CLN action is executed | The corresponding module action is executed for the license service | Product Relation actions follow the parent module action; Addon Relations do not add a separate suspend/unsuspend workflow |
+| License service is terminated | The registered IP or key is removed from CLN | The related license is removed when its addon service or configurable selection is terminated | Run **Terminate** on the recorded child through the parent/addon workflow and verify the result in CLN |
+| Parent service is hard-deleted | Not applicable | Tracked addon and configurable-option licenses are cleaned up | The recorded child connection is cleaned up; verify the CLN license after destructive order operations |
 
 Key-based licenses do not use the IP resolution or deferred-IP workflow.
 
@@ -375,6 +408,18 @@ After provisioning, verify all three locations:
 3. CLN contains the same IP or key and the correct license product.
 
 ## Troubleshooting
+
+::: warning Delete services before product or addon definitions
+Terminate or delete all associated WHMCS services before deleting their product
+or product-addon definition. The plugin needs the saved module settings and CLN
+credentials from that definition to identify and revoke the license safely.
+
+If the definition has already been deleted, the WHMCS service record can still
+be hard-deleted, but the plugin cannot automatically clean up the corresponding
+CLN license. It records the pending cleanup in the WHMCS Module Queue and
+Activity Log. Reconcile the license manually in CLN before considering the
+service fully removed.
+:::
 
 | Symptom | What to check |
 | --- | --- |
