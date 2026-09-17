@@ -32,11 +32,28 @@ When CloudLinux Isolates is enabled for a domain:
 | --- | --- | --- |
 | Apache | ✅ Supported | See [Compatible PHP Handlers](#compatible-php-handlers) below for handler-specific requirements. |
 | NGINX | 🔜 Coming in future releases | |
-| LiteSpeed | 🔜 Coming in future releases | |
+| LiteSpeed | ✅ Supported | Standalone LiteSpeed Web Server. Requires the package versions listed in [LiteSpeed requirements](#litespeed-requirements) below. |
+
+##### LiteSpeed requirements
+
+CloudLinux Isolates is supported under **standalone LiteSpeed Web Server**. In addition to the [minimum package versions](#minimum-package-versions) listed above, LiteSpeed servers require:
+
+| Package                       | Minimum Version | Notes                             |
+| ----------------------------- | --------------- | --------------------------------- |
+| cagefs                        | 7.6.47-1        |                                   |
+| lve-wrappers                  | 0.7.16-1        |                                   |
+| lve (liblve)                  | 2.2-8           |                                   |
+| ea-apache24-mod_hostinglimits | 1.0-49          | cPanel (EasyApache 4) servers only |
+
+To check the installed versions:
+
+```
+rpm -q cagefs lve-wrappers lve ea-apache24-mod_hostinglimits
+```
 
 #### Compatible PHP Handlers
 
-The following table applies to **Apache** — the only supported web server for CloudLinux Isolates.
+The following table applies to **Apache**. For standalone LiteSpeed, see [LiteSpeed requirements](#litespeed-requirements) above.
 
 | Handler | Status | Notes |
 | --- | --- | --- |
