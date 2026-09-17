@@ -32,18 +32,20 @@ When CloudLinux Isolates is enabled for a domain:
 | --- | --- | --- |
 | Apache | ✅ Supported | See [Compatible PHP Handlers](#compatible-php-handlers) below for handler-specific requirements. |
 | NGINX | 🔜 Coming in future releases | |
-| LiteSpeed | ✅ Supported | Standalone LiteSpeed Web Server. Requires the package versions listed in [LiteSpeed requirements](#litespeed-requirements) below. |
+| LiteSpeed | ✅ Supported (cPanel only) | Standalone LiteSpeed Web Server, on cPanel servers only. See [LiteSpeed requirements](#litespeed-requirements) below. |
 
 ##### LiteSpeed requirements
 
-CloudLinux Isolates is supported under **standalone LiteSpeed Web Server**. In addition to the [minimum package versions](#minimum-package-versions) listed above, LiteSpeed servers require:
+CloudLinux Isolates is supported under **standalone LiteSpeed Web Server**, and for now **on cPanel servers only** — LiteSpeed on Plesk, DirectAdmin and integration-script panels is not yet supported.
 
-| Package                       | Minimum Version | Notes                             |
-| ----------------------------- | --------------- | --------------------------------- |
-| cagefs                        | 7.6.47-1        |                                   |
-| lve-wrappers                  | 0.7.16-1        |                                   |
-| lve (liblve)                  | 2.2-8           |                                   |
-| ea-apache24-mod_hostinglimits | 1.0-49          | cPanel (EasyApache 4) servers only |
+In addition to the [minimum package versions](#minimum-package-versions) listed above, LiteSpeed servers require:
+
+| Package                       | Minimum Version |
+| ----------------------------- | --------------- |
+| cagefs                        | 7.6.47-1        |
+| lve-wrappers                  | 0.7.16-1        |
+| lve (liblve)                  | 2.2-8           |
+| ea-apache24-mod_hostinglimits | 1.0-49          |
 
 To check the installed versions:
 
@@ -92,6 +94,8 @@ For full details on this directive, see [lsapi_per_user in mod_lsapi documentati
 | Integration Scripts*     | ✅ Supported                 |
 
 *[Control Panel Integration](/cloudlinuxos/control_panel_integration/#control-panel-api-integration)
+
+The table above applies to Apache. Under [standalone LiteSpeed](#litespeed-requirements), only cPanel is supported so far.
 
 #### Compatible PHP Versions
 
