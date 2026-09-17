@@ -36,7 +36,7 @@ When CloudLinux Isolates is enabled for a domain:
 
 ##### LiteSpeed requirements
 
-CloudLinux Isolates is supported under **standalone LiteSpeed Web Server**, and for now **on cPanel servers only** — LiteSpeed on Plesk, DirectAdmin and integration-script panels is not yet supported.
+CloudLinux Isolates is supported under **standalone LiteSpeed Web Server**, and for now **on cPanel servers only**.
 
 In addition to the [minimum package versions](#minimum-package-versions) listed above, LiteSpeed servers require:
 
