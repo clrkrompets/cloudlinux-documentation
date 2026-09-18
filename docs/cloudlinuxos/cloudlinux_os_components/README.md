@@ -6245,6 +6245,153 @@ yum install cagefs
 
 
 
+### Shared node_modules Store
+
+* [Store requirements](./#store-requirements)
+* [How the Store works](./#how-the-store-works)
+* [Enabling the Store](./#enabling-the-store)
+* [Converting existing applications](./#converting-existing-applications)
+* [Store configuration](./#store-configuration)
+* [Monitoring and maintenance](./#monitoring-and-maintenance)
+* [Disabling the Store](./#disabling-the-store)
+* [Store limitations](./#store-limitations)
+
+The <span class="notranslate">Shared node_modules Store</span> is an optional <span class="notranslate">Node.js Selector</span> feature that deduplicates the `node_modules` trees of Node.js applications across all accounts on a server. Identical package files are stored once, in a root-owned store, and every application's `node_modules` is built from hardlinks into that store. On servers with many Node.js applications this removes most of the disk space that identical dependency trees occupy, and repeated installs of the same packages no longer download them again.
+
+The feature is **off by default** and is enabled by the administrator per server. Applications keep working exactly as before: `npm install`, `require()`, Passenger startup, the panel's *Run NPM Install* button — nothing changes for the end user except that the installed tree is shared.
+
+#### **Store requirements**
+
+* <span class="notranslate">LVE Manager</span> 7.11.49 or later. The delivery engine ships as a separate package, <span class="notranslate">`cl-bun`</span> 1.4.x, which `cl-node-modules-storage enable` installs from the CloudLinux repositories on demand (it is not installed on servers that never enable the feature).
+* CloudLinux OS Shared 7, 8, 9 or 10, or Ubuntu 22.04 with cPanel; **x86_64 only**.
+* cPanel or DirectAdmin. On Plesk, Webuzo and servers without a panel the feature reports `unsupported` and cannot be enabled.
+* `fs.protected_hardlinks = 1` (the default on every supported OS). The feature refuses to deliver a shared tree while this sysctl is off.
+* All account home directories that should use the Store must be on the same filesystem as a configured storage directory (hardlinks cannot cross filesystems). The default storage directory is <span class="notranslate">`/var/lib/cl-node-modules-storage`</span>; add one storage per filesystem if your homes are split.
+
+#### **How the Store works**
+
+When an account runs a bare `npm install` (over SSH, or through the panel's Node.js Selector UI / `cloudlinux-selector install-modules`), the request is handled in three phases:
+
+1. **Resolve** — runs as the account, with the account's own `package.json` and lockfile, using the bundled <span class="notranslate">bun</span> engine (`/opt/cl-bun/bun`) in the application's environment. Nothing is written to the application yet.
+2. **Deliver** — runs as root through the <span class="notranslate">`cl-bun-deliveryd`</span> service. Packages are fetched from the allowed registry into the shared store (only if they are not there yet), the application's `node_modules` is assembled in a staging directory from hardlinks into the store, and the old tree is swapped out atomically. Install scripts are **never** executed by root.
+3. **Rebuild** — runs as the account again: packages that have install scripts or native builds (`binding.gyp`) are copied into the application as private, account-owned files and built there, so their output never lands in the shared store. The application is then restarted and health-checked; if the check fails, the previous `node_modules` is restored.
+
+Files inside `node_modules` that come from the store are owned by root and are read-only for the account. Any command that has to modify the tree — `npm install <package>`, `npm update`, `npm uninstall`, `npm ci`, `npm rebuild` — first converts the tree back to a private copy (*unshare*) and then runs plain npm, so it keeps working; the next bare `npm install` shares the tree again.
+
+If the application cannot be served from the Store — for example it uses an `npm-shrinkwrap.json`, an npm 6 (`lockfileVersion: 1`) `package-lock.json`, npm `workspaces`, `patchedDependencies`, or a symlinked `package.json`/lockfile — `npm install` transparently falls back to plain npm and prints a one-line `Shared node_modules Store: … using classic npm` notice.
+
+Dependencies that are not plain packages from the allowed registry — git URLs, local paths, tarball URLs, packages from another or a private registry — are **refused** by the Store: root never fetches from arbitrary sources or with account credentials, and such an `npm install` fails with `bun delivery declined: unsupported_source` (or `registry_not_allowed`). npm aliases (`"foo-cjs": "npm:foo@^4"`) of registry packages are supported. Add the account to the exclusion list (`cl-node-modules-storage exclude-list --add <username>`) to let it use plain npm.
+
+Install hooks of dependencies always run as the account, never as root. A hook of an **optional** dependency that fails (for example a native module without prebuilt binaries for the server) drops that optional package, the same way plain npm does; a failing hook of a required dependency fails the install and leaves the previous `node_modules` in place.
+
+#### **Enabling the Store**
+
+Make sure the storage directory is on the same filesystem as the account homes, then enable the feature. The first `enable` installs the <span class="notranslate">`cl-bun`</span> engine package ("Installing cl-bun; this may take several minutes"), so run it from a shell rather than a cron job:
+
+<div class="notranslate">
+
+```
+cl-node-modules-storage enable
+```
+</div>
+
+Optionally choose another storage directory and a soft size threshold at the same time:
+
+<div class="notranslate">
+
+```
+cl-node-modules-storage enable --storage-path /home/.cl-node-modules-storage --soft-storage-limit-gb 50
+```
+</div>
+
+Check the result with `cl-node-modules-storage status`: `feature_status` must be `enabled`, `uncovered_users` should be `0` (accounts whose home is on a filesystem without a storage directory keep using plain npm), and the `storages[].usable` flags must be `true`.
+
+From this moment every **new** bare `npm install` of every account is served from the Store. Existing applications keep their current private `node_modules` until they are either reinstalled by the account (`npm install`, or *Run NPM Install* in the panel) or converted by the administrator (next section).
+
+#### **Converting existing applications**
+
+An application that already has a private `node_modules` can be converted without the account doing anything. Always start with a dry run — it validates the application (lockfile, manifest, health of the running application) and changes nothing:
+
+<div class="notranslate">
+
+```
+cloudlinux-selector migrate --json --interpreter nodejs --user <username> --app-root <application root> --dry-run
+```
+</div>
+
+If the dry run reports the application as eligible, run the same command without `--dry-run`. The conversion is transactional: the old tree is kept until the rebuilt application passes its health check, every step is recorded in a journal under <span class="notranslate">`/var/lib/cl-node-modules-storage/bun-migration/`</span>, and an interrupted conversion (crash, reboot) is finished or rolled back automatically when the <span class="notranslate">`cl-bun-deliveryd`</span> service starts next. `--skip-web-check` skips the HTTP health check for applications that do not serve web requests.
+
+An application whose website already answers with a 5xx error before the conversion is refused by the dry run; fix the application first.
+
+#### **Store configuration**
+
+The configuration lives in <span class="notranslate">`/opt/cl-bun/etc/node-modules-storage.json`</span> (<span class="notranslate">`/etc/cloudlinux/node-modules-storage.json`</span> is a symlink to it) and is edited only with `cl-node-modules-storage`:
+
+| Setting | Command | Default | Meaning |
+|---|---|---|---|
+| storage directories | `storage-list --add PATH` / `--remove PATH`, or `set --storage-path PATH` | `/var/lib/cl-node-modules-storage` | one root-owned directory per filesystem that holds account homes |
+| allowed registry | `set --allowed-registries URL` | `https://registry.npmjs.org/` | the single registry root is allowed to fetch from; changing it requires an empty store |
+| excluded accounts | `exclude-list --add USER` / `--remove USER` | none | accounts that always use plain npm |
+| deliveries per account per hour / day | `set --deliveries-per-hour N`, `set --deliveries-per-day N` | 60 / 200 | how many shared installs one account may request; above the limit `npm install` fails with a rate-limit message instead of silently falling back |
+| concurrent deliveries | `set --concurrent-deliveries N` | 4 | root-side installs running at the same time on the server (at most one per account) |
+| delivery queue timeout | `set --delivery-queue-timeout SECONDS` | 120 | how long an install waits for a free slot before it fails |
+| soft storage limit | `set --soft-storage-limit-gb GB` | 0 (off) | when a storage directory's recorded usage is above this value, new shared installs fail with `bun delivery declined: soft_storage_limit` until `prune` frees space; it is a guardrail against runaway growth, not a hard quota (concurrent installs may overshoot it) |
+
+All settings take effect for the next install; the service does not need a restart.
+
+#### **Monitoring and maintenance**
+
+<div class="notranslate">
+
+```
+cl-node-modules-storage status
+```
+</div>
+
+prints the configuration, the daemon and socket state, and per storage: bytes used and allocated, the number of shared files and hardlinks, the deduplication ratio, the estimated space saved, the number of *poisoned* entries and whether the last measurement was complete (`stale`). The `telemetry` block aggregates the same numbers for the whole server together with the number of accounts and applications currently served from the Store. The same aggregates are reported by `cloudlinux-summary` as `shared_node_modules_*` fields.
+
+**Pruning.** Packages that no application references any more are removed by
+
+<div class="notranslate">
+
+```
+cl-node-modules-storage prune
+```
+</div>
+
+which also runs daily from the <span class="notranslate">`cl-node-modules-storage-prune.timer`</span>. Pruning is conservative: it removes only store entries whose files are not linked into any application.
+
+**Poisoned entries.** The Store relies on its files being owned by root. A recursive ownership change inside an account home — for example `chown -R user /home/user` run by an administrator or a restore tool, or Plesk's *repair fs* — changes the owner of the shared files themselves, because they are hardlinks. `status` then reports `poisoned_entries > 0` with a warning, `prune` quarantines such entries instead of serving them, and the next installs that need those packages fetch fresh copies. Avoid recursive `chown`/`chmod` over `nodevenv` directories on servers with the Store enabled; if you have to, run `cl-node-modules-storage prune` afterwards.
+
+**Logs.** Deliveries are logged to <span class="notranslate">`/var/log/cloudlinux/bun-delivery.log`</span>, conversions to <span class="notranslate">`/var/log/cloudlinux/cl-bun-migration.log`</span>; both are rotated by logrotate. `status` also lists `retained_staging` — leftover staging directories from interrupted installs — which `cl-node-modules-storage reclaim-staging` removes.
+
+#### **Disabling the Store**
+
+<div class="notranslate">
+
+```
+cl-node-modules-storage disable
+```
+</div>
+
+switches all accounts back to plain npm immediately. Applications that were served from the Store keep running from their shared trees; each of them is converted back to a private copy the next time the account runs any npm command that modifies the tree, or right away with `npm install`. The <span class="notranslate">`cl-bun-deliveryd`</span> service stays socket-activated for exactly this conversion and returns to standby afterwards. The store directory and the `cl-bun` package are kept; `prune` removes store entries as applications leave it.
+
+If the <span class="notranslate">`cl-bun`</span> package is removed while the feature is enabled, `status` reports a warning and every shared install fails with an explicit message asking the administrator to run `cl-node-modules-storage enable` (which reinstalls the engine) or `disable`. Stopping the <span class="notranslate">`cl-bun-deliveryd.socket`</span> unit has a similar effect: shared installs and the conversion of shared trees back to private copies both need the service, so classic `npm` commands on an already shared application fail until the socket is started again.
+
+#### **Store limitations**
+
+* Only the **full-tree install** is served from the Store: `cloudlinux-selector install-modules` (which for Node.js always installs the application's `package.json`) and a bare `npm install`/`npm i` over SSH. Named packages (`npm install <package>`), `npm update`, `npm uninstall`, `npm ci`, `npm rebuild` and every other npm command run plain npm (after converting the tree to a private copy if needed).
+* Applications with `npm-shrinkwrap.json`, an npm 6 `package-lock.json` (`lockfileVersion: 1`), npm `workspaces`, `patchedDependencies`, or a symlinked `package.json` or lockfile use plain npm. A v1 lockfile is upgraded to v3 by the account's next plain `npm install`, after which the application becomes eligible.
+* On Node.js 14 and older (npm 6) an application whose *aliased* dependency has an install hook is refused (`bun delivery declined: unsupported_source`; the reason is logged in `/var/log/cloudlinux/bun-delivery.log`): npm 6 cannot rebuild such a package by name. Select Node.js 16 or newer for the application, or exclude the account.
+* Dependencies that are not published on the allowed registry — git repositories, local paths, tarball URLs, packages from another or a private registry (including an account's `.npmrc` registry override) — are refused, and `npm install` of such an application fails while the Store is enabled. Exclude the account with `cl-node-modules-storage exclude-list --add <username>`; excluded accounts use plain npm for everything.
+* One registry per server (`https://registry.npmjs.org/` by default). Changing it requires an empty store.
+* **Disk quotas.** The shared files belong to root, so a delivered application's `node_modules` is charged to the account's disk quota only for its private part (packages with install scripts, native builds and the application's own files). Quota reports of accounts with shared trees are therefore smaller than the visible size of their `node_modules`; `cl-node-modules-storage status` shows the real usage of the store.
+* Account backup and transfer tools copy the shared files as ordinary files (they are regular hardlinks), so a restored or transferred account gets a private tree of the full size; run `npm install` there to share it again.
+* Plesk is not supported (it has its own Node.js support); on Webuzo and servers without a panel the Node.js Selector does not expose the feature.
+* ARM servers are not supported: `cl-bun` and `lvemanager` 7.11.49+ are x86_64 packages.
+
+
+
 ### Node.js deployment
 
 
