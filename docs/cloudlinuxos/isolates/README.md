@@ -1,5 +1,10 @@
 # CloudLinux Isolates (BETA)
 
+CloudLinux Isolates isolates the individual websites of a single hosting account from one another. It has two layers, which are described in turn below:
+
+* **[CageFS per domain](#cagefs-per-domain)** — *filesystem* isolation, so that a compromised website cannot reach another site's files.
+* **[LVE per domain](#lve-per-domain)** — *resource* isolation, so that one website's CPU, memory and I/O usage is limited and accounted for on its own.
+
 ## CageFS Per Domain
 
 CloudLinux Isolates is a security feature that provides domain-level isolation within CageFS. It allows server administrators to isolate individual websites from each other, even when they belong to the same hosting account. This prevents cross-site attacks where a compromised website could access files or data from other websites on the same account.
@@ -676,6 +681,56 @@ $ isolatectl limits apply --domain example.com
 ```
 
 
+#### Per-Domain Statistics
+
+```
+isolatectl stats [--domain <domain>] [--period <period>]
+```
+
+Shows resource usage for the calling account's isolated domains. Like the rest of <span class="notranslate">`isolatectl`</span>, it is run by the account owner rather than by root, identifies the caller automatically, and returns JSON.
+
+**Parameters:**
+
+| Parameter | Description |
+| --------- | ----------- |
+| `--domain` | (Optional) Report a single domain only |
+| `--period` | (Optional) Time window to report over; default `10m` |
+
+The period grammar is <span class="notranslate">`lveinfo`</span>'s: <span class="notranslate">`s`</span>, <span class="notranslate">`m`</span>, <span class="notranslate">`h`</span>, <span class="notranslate">`d`</span>, plus <span class="notranslate">`today`</span>. **<span class="notranslate">`1m`</span> is one minute, not one month** — a month is <span class="notranslate">`30d`</span>.
+
+**Example:**
+
+```
+$ isolatectl stats --domain example.com --period 1d
+{
+  "result": "success",
+  "scope": {
+    "owner_uid": 1000,
+    "period": "1d",
+    "note": "only domains active during the window are recorded"
+  },
+  "domains": [
+    {
+      "name": "example.com",
+      "lve_id": 60057,
+      "owner_uid": 1000,
+      "usage":  {"cpu": 120, "ep": 2, "vmem": 0, "pmem": 4096, "nproc": 5, "io": 0, "iops": 0},
+      "peak":   {"cpu": 900, "ep": 5, "vmem": 0, "pmem": 9012, "nproc": 9, "io": 0, "iops": 0},
+      "limits": {"cpu": 5000, "ep": 20, "vmem": 0, "pmem": 65536, "nproc": 30, "io": 2048, "iops": 500},
+      "faults": {"cpu": 0, "ep": 3, "vmem": 0, "pmem": 0, "nproc": 0, "io": 0, "iops": 0}
+    }
+  ]
+}
+```
+
+<span class="notranslate">`usage`</span> is the average over the window, <span class="notranslate">`peak`</span> the highest sample in it, and <span class="notranslate">`limits`</span> the caps in force.
+
+:::warning An idle website is absent, not zero
+Only domains that were active during the period are recorded at all, so a quiet website does not appear in <span class="notranslate">`domains`</span> rather than appearing with zeroes. An empty <span class="notranslate">`domains`</span> list is an ordinary answer, not an error — the <span class="notranslate">`scope`</span> object is always returned so that "quiet" can be told apart from "no such account".
+:::
+
+***
+
 ### Executing Commands in an Isolated Site Context
 
 The `cagefs_enter_site` utility allows executing a command inside CageFS in the context of a specific isolated website. This can be useful for debugging or running site-specific operations.
@@ -794,3 +849,173 @@ CloudLinux Isolates integrates automatically with supported control panels. When
 * **Renamed**: Isolation configuration is automatically updated
 * **Deleted**: Isolation configuration is automatically cleaned up
 * **Document root changed**: Configuration is regenerated via hooks
+
+***
+
+## LVE Per Domain
+
+CloudLinux Isolates also allows resource limits — CPU, memory, I/O, processes and entry processes — to be applied to an *individual website* rather than to the hosting account as a whole. A single busy or misbehaving site is then throttled on its own, without consuming the resources its sibling sites on the same account depend on.
+
+:::warning BETA
+Per-domain LVE limits are a BETA feature, supported on CloudLinux OS 8 and 9.
+:::
+
+### How it relates to CageFS per domain
+
+The two halves of CloudLinux Isolates are separate layers and can be reasoned about separately:
+
+| | |
+|-|-|
+|[CageFS per domain](#cagefs-per-domain) | *Filesystem* isolation — a compromised website cannot read another site's files. Always available where CageFS is.|
+|LVE per domain | *Resource* isolation — a website has its own CPU, memory, I/O and process limits. Requires CloudLinux OS 8 or 9 and the package versions listed under [Per-Domain Prerequisites](#per-domain-prerequisites).|
+
+In practice you do not enable them separately. The <span class="notranslate">`cagefsctl --site-isolation-*`</span> commands documented above drive both: each one invokes the matching <span class="notranslate">`lvectl`</span> per-domain command for you when the prerequisites are met, and silently skips that step when they are not. So on a server that does not support per-domain LVEs, website isolation still works — you get the filesystem separation without the resource limits, rather than an error.
+
+### Per-Domain Prerequisites
+
+Per-domain LVE limits are supported on CloudLinux OS 8 and 9. CloudLinux OS 7 predates the required kernel interface; on it, commands that need per-domain support fail with exit code `38` and the message <span class="notranslate">`Domain limits are not supported by this kernel`</span>.
+
+In addition to the [CloudLinux Isolates prerequisites](#prerequisites), per-domain LVE limits require:
+
+| Package | Minimum Version |
+| ---------- | --------------- |
+| lve-stats3 | 5.1.0-1         |
+| lve-utils  | 6.6.40-1        |
+
+To check the installed versions:
+
+```
+rpm -q lve-stats3 lve-utils
+```
+
+### How the containers are arranged
+
+Understanding the container hierarchy explains most of what the statistics show:
+
+```
+ROOT
+└── LVP  (reseller, when reseller limits are in use)
+    └── LVP  (the hosting account)          <-- reported as "the account"
+        ├── LVE  (the account's own processes — cron, SSH, non-isolated sites)
+        ├── LVE  (site1.com)
+        └── LVE  (site2.com)
+```
+
+The account's container is the **parent** of its websites', and the kernel keeps
+the parent's counters as the sum of its children's. So the figure the statistics
+tools report for an account is the total for everything beneath it — its own
+processes *and* every isolated website. The account's own processes are a
+separate container at the same level as the websites, and are never reported on
+their own.
+
+Because the websites are siblings of the account's own container rather than nested inside it, work done by an isolated website is charged to that website and to the account total, but never to the account's own processes — and the reverse holds too, so an account's cron jobs are never absorbed by one of its websites.
+
+**Limits nest, even though usage does not.** A domain is bounded by its account's limits, which are in turn bounded by the reseller's; raising a domain's limit above its account's does not grant it more than the account has. A domain with no explicit limits of its own is simply bounded by its account's — registering a domain does not, by itself, restrict it.
+
+### Enabling per-domain limits
+
+Under a control panel, use the [`cagefsctl --site-isolation-*` commands](#command-reference) — they enable both isolation layers together and are the supported administrator path.
+
+The underlying <span class="notranslate">`lvectl`</span> commands are available for integration scripts, and for inspecting or repairing state:
+
+| | |
+|-|-|
+|<span class="notranslate">`lvectl allow-domain-limits <user>`</span> | Create the account's LVP and allow per-domain limits for it. Idempotent.|
+|<span class="notranslate">`lvectl deny-domain-limits <user>`</span> | Remove the account's LVP and disallow per-domain limits.|
+|<span class="notranslate">`lvectl enable-domain-limits <domain>`</span> | Register a domain LVE. The owner and document root are resolved from the control panel.|
+|<span class="notranslate">`lvectl disable-domain-limits <domain>`</span> | Unregister the domain LVE and remove its registry entry.|
+|<span class="notranslate">`lvectl list-domains <uid>`</span> | List the domain LVEs of the account with the given numeric UID.|
+|<span class="notranslate">`lvectl regenerate-domains --username <user> ...`</span> | Refresh the domain configuration and id mapping after a rename or document root change.|
+
+See [lvectl](/cloudlinuxos/command-line_tools/#lvectl) for the full syntax.
+
+:::tip Note
+<span class="notranslate">`lvectl list-domains`</span> lists the members of an account's LVP. For a *reseller*, that LVP holds the reseller's member accounts rather than domains, so the command's output alone does not tell you whether an account is isolated. A member account resolves in <span class="notranslate">`/etc/passwd`</span>; a domain LVE id never does.
+:::
+
+The domain renaming, document root changes and account renames performed through a supported control panel are handled by the panel hooks, which call <span class="notranslate">`lvectl regenerate-domains`</span> automatically. Run it by hand only after changing these outside the panel.
+
+### Setting per-domain limits
+
+Per-domain limits are set by the account owner with [`isolatectl limits`](#per-domain-resource-limits), not by the administrator: there is no <span class="notranslate">`lvectl`</span> command that sets an individual domain's limits. Administrators control the account-level limits, which bound every domain underneath them.
+
+Where the state lives:
+
+| | |
+|-|-|
+|<span class="notranslate">`~/.lve/domains.json`</span> | The account's per-domain limits and its list of isolated domains. This is the file <span class="notranslate">`isolatectl limits apply`</span> reads when re-applying limits to the kernel.|
+|<span class="notranslate">`/etc/container/lvd_ids/<uid>`</span> | The account's domain-name-to-LVE-id registry.|
+
+### Viewing per-domain usage
+
+Per-domain statistics are collected by default once the feature is active. Every statistics tool can report them:
+
+| | |
+|-|-|
+|[`isolatectl stats`](#per-domain-statistics) | For the **account owner** — usage for their own isolated domains.|
+|<span class="notranslate">`lveinfo --with-domains`</span>, <span class="notranslate">`lveinfo --domain <domain>`</span> | Historical per-domain usage, with the <span class="notranslate">`domain_id`</span>, <span class="notranslate">`domain`</span> and <span class="notranslate">`parent_uid`</span> columns added.|
+|<span class="notranslate">`cloudlinux-statistics --with-domains`</span> | A <span class="notranslate">`domains`</span> array nested inside each account object.|
+|<span class="notranslate">`cloudlinux-top --domains`</span> | Current per-domain usage. Note the plural: <span class="notranslate">`-d`/`--domain`</span> on this tool is an unrelated filter.|
+|<span class="notranslate">`lvechart --domain <domain>`</span> | A usage chart for one domain instead of the account.|
+
+Each <span class="notranslate">`--domain`</span> selector accepts a domain name, a document root, or a numeric domain LVE id. See [Command Line Tools](/cloudlinuxos/command-line_tools/#lveinfo) for full syntax.
+
+:::tip Note
+On an account with no isolated domains, these options are accepted and change nothing — the output is identical to the same command without them.
+:::
+
+### Reading per-domain figures
+
+Three properties of the numbers regularly surprise people reading them for the first time. None of them indicates a fault.
+
+**A website's usage is part of its account's, not additional to it.** The per-domain rows break the account's figure down; they do not add to it:
+
+<div class="notranslate">
+
+```
+account  =  the account's own work  +  site1.com  +  site2.com  + ...
+            (cron, SSH, non-isolated
+             sites — everything outside
+             an isolated website)
+```
+</div>
+
+**Faults are counted per container, then rolled up.** The kernel records a fault only against the container whose limit refused the request. <span class="notranslate">lve-stats</span> then rolls a website's faults into its account's total, so an account read *without* a per-domain option already includes its websites' faults; passing <span class="notranslate">`--with-domains`</span> splits them apart again. The [user notification email](/cloudlinuxos/cloudlinux_os_components/#customize-lve-stats2-notifications) is the one place that subtracts them instead, so that the same refusal is not reported twice in a message that already lists the site.
+
+**Per-domain history is kept for fewer days than per-account history** — 7 days against 30, by default. A report covering a longer range returns correspondingly less per-domain data than account data, without the rows themselves indicating why. Both windows are administrator-configurable; see <span class="notranslate">`keep_history_days_domain`</span> in [LVE-Stats 2 configuration](/cloudlinuxos/cloudlinux_os_components/#configuration) (<span class="notranslate">`/etc/sysconfig/lvestats2`</span>).
+
+### Fault notifications
+
+When a website hits one of its own limits, the notification sent to the account owner names the website that faulted, alongside the limit it hit. Notifications continue to be addressed per account, and the thresholds and period that govern the account-level notification govern the per-domain section too — so enabling per-domain limits does not, by itself, change who is emailed or how often.
+
+Administrators customising the email templates should see the <span class="notranslate">`domain_faults`</span> variable in [Customize LVE-stats2 notifications](/cloudlinuxos/cloudlinux_os_components/#customize-lve-stats2-notifications).
+
+### Troubleshooting per-domain limits
+
+**"Domain limits are not supported by this kernel (requires lve_lvp_create2)"**
+
+The kernel predates per-domain LVE support. Per-domain limits require CloudLinux OS 8 or 9; on CloudLinux OS 7 the [CageFS half](#cagefs-per-domain) of CloudLinux Isolates is still available.
+
+**Isolation was enabled, but no domain LVEs were created**
+
+The <span class="notranslate">`cagefsctl --site-isolation-*`</span> commands always apply the filesystem layer, and add the per-domain LVE only when the [prerequisites](#per-domain-prerequisites) are met. Check the installed versions:
+
+```
+rpm -q lve-stats3 lve-utils
+```
+
+If either is below the minimum, update it and then re-run <span class="notranslate">`cagefsctl --site-isolation-enable <domain>`</span>. Removing isolation is never gated this way, so any containers created by an earlier version can always be torn down.
+
+**"No domain limits configured for UID *N*"**
+
+The account exists but has no isolated domains. Enable isolation for a domain first — <span class="notranslate">`cagefsctl --site-isolation-enable <domain>`</span>. A genuinely unknown account reports <span class="notranslate">`UID N does not exist`</span> instead.
+
+**A domain's statistics stopped after a rename or a document root change**
+
+The domain's registry entry is keyed on its document root. Changes made through a supported control panel are handled by the panel hooks; if the change was made outside the panel, refresh the mapping by hand:
+
+```
+lvectl regenerate-domains --username <user> --domain <new> --old-domain <old>
+```
+
+***

@@ -246,6 +246,13 @@ The main configuration file <span class="notranslate">`/etc/sysconfig/lvestats2`
 * <span class="notranslate">`timeout`</span> - timeout for custom plugins (seconds). If plugin execution does not finish within this period, plugin is terminated. Default value is 5 seconds.
 * <span class="notranslate">`interval`</span> - duration of one cycle of <span class="notranslate">lvestats-server</span> (seconds). This should be less than total duration of execution of all plugins. Default value is 5 seconds. Increasing this parameter makes precision of statistics worse.
 * <span class="notranslate">`keep_history_days`</span> - period of time (in days) to keep history in th database. Old data is removed from the database automatically. Default value is 30 days.
+* <span class="notranslate">`keep_history_days_domain`</span> - period of time (in days) to keep **per-domain** history, collected for accounts with [CloudLinux Isolates](/cloudlinuxos/isolates/#lve-per-domain) enabled. Default value is 7 days. This window is deliberately not inherited from <span class="notranslate">`keep_history_days`</span>: the per-domain tables hold one series per isolated domain, so reusing the account window would multiply the database footprint several-fold.
+
+  :::warning keep_history_days caps keep_history_days_domain
+  The effective per-domain window is the smaller of the two. Setting <span class="notranslate">`keep_history_days_domain = 14`</span> on a server where <span class="notranslate">`keep_history_days`</span> is `7` yields `7` days, not `14`. The cap is required for correctness, not tidiness: per-domain averages are divided by the number of heartbeat rows in the per-account history table over the requested range, so a per-domain window reaching further back than the per-account one would divide by a count that no longer exists.
+
+  <span class="notranslate">`lvestats-server`</span> reports the effective value, and whether it came from the configuration file or the default, in its startup summary.
+  :::
 * <span class="notranslate">`mode`</span> – sets compatibility output mode (compatibility with older lveinfo version
   * Value `v1` enables compatibility with old version of <span class="notranslate">lveinfo</span>.
   * Value `v2` enables <span class="notranslate">`extended`</span> output mode, but can break LVE plugins for control panels (statistics in <span class="notranslate">LVE Manager</span>, <span class="notranslate">Resource Usage</span>, etc). Support of `v2` mode will be added to LVE plugins in the recent future. When mode parameter is absent, later version of <span class="notranslate">lveinfo</span> is implied.
@@ -835,6 +842,26 @@ The list of variables that can be used in the template:
 |<span class="notranslate"> `lPMem` `lEP` `PMemF` `lVMem` `anyF` `IOf` `VMemF` `lCPU` `aIOPS` `aEP` `aPMem` `IOPSf` `lIO` `lIOPS` `aIO` `EPf` `aCPU` `aVMem` `NprocF` `aNproc` `lNproc` `CPUf` </span> |  | See description in <span class="notranslate">`lveinfo --help`</span> output. Available only for users|
 |<span class="notranslate">`STATS_HTML`</span> |  | html table with the list of users that exceeded limits. Available for administrator and reseller.|
 |<span class="notranslate">`STATS`</span> |  | ASCII - table with the list of users that exceeded limits. Available only for admins and resellers.|
+|<span class="notranslate">`domain_faults`</span> |  | List of the user's individual websites that exceeded a limit during the period, when [CloudLinux Isolates](/cloudlinuxos/isolates/#lve-per-domain) is in use. Available only for users, and **defined only when at least one of that user's domains faulted**.|
+
+**The <span class="notranslate">`domain_faults`</span> variable**
+
+When an account has [CloudLinux Isolates](/cloudlinuxos/isolates/#lve-per-domain) enabled, a limit can be hit by one website rather than by the account as a whole. The notification then identifies which one. The variable is a list; each entry describes a single domain:
+
+| | |
+|-|-|
+|Field | Description|
+|<span class="notranslate">`domain`</span> | The domain name, or its document root when the control panel cannot resolve a name. Never the numeric domain <span class="notranslate">LVE</span> id, which names nothing the recipient would recognize.|
+|<span class="notranslate">`cpuf` `vmemf` `pmemf` `epf` `nprocf` `iof` `iopsf`</span> | Fault counters, in the same sense as the account-level <span class="notranslate">`CPUf`</span>, <span class="notranslate">`VMemF`</span> and so on. **A counter is absent rather than zero when that limit did not fault**, so a template can print only the limits that actually fired.|
+|<span class="notranslate">`lcpu` `lvmem` `lpmem` `lep` `lnproc` `lio` `liops`</span> | The domain's limits, in the units the account section of the same email already uses: <span class="notranslate">CPU</span> in percent, memory in KB, <span class="notranslate">I/O</span> in KB/s.|
+
+:::tip Note
+The same thresholds and period govern the domain section and the account section, so a domain appears here only under the notification settings that would have surfaced an account-level fault.
+
+Fault counts in the **user** notification are split, not repeated. The kernel records a fault only against the container whose limit refused the request, and <span class="notranslate">lve-stats</span> then rolls a website's faults into its account's total — so on every other surface (<span class="notranslate">`lveinfo`</span>, <span class="notranslate">`cloudlinux-statistics`</span>, <span class="notranslate">`cloudlinux-top`</span>, and the administrator and reseller notification tables) an account's fault counters already include its websites'.
+
+The user notification is the one exception: because it also renders the per-domain section above, the account figures in it have the websites' fault counts **subtracted**, so the same refusal is never stated twice. An account whose faults were *all* its websites' therefore renders no account fault section at all, and the domain section carries the email on its own. Usage averages and limits are not adjusted this way — "your account used this much" is true of the account and its websites together, which is what the reader is being told.
+:::
 
 Sender’s email address by default is administrator email address from control panel settings <span class="notranslate">`(root@{hostn_name}`</span> if there is no email in the control panel).
 
