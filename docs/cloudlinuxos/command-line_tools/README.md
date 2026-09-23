@@ -2277,12 +2277,12 @@ cl-node-modules-storage reconcile
 | Command | Description |
 |---|---|
 | `status` | configuration, daemon state, per-storage usage (`used_bytes`, `allocated_bytes`, `shared_inodes`, `shared_links`, `deduplication_ratio`, `estimated_saved_bytes`, `poisoned_entries`, `retained_staging`, `stale`) and the server-wide `telemetry` block (`active_users`, `active_applications`, `eligible_users`, `eligible_applications`) |
-| `enable` / `disable` | switch the Store on or off for all accounts; `disable` leaves already shared applications running and converts each of them back to a private tree on its next npm command |
+| `enable` / `disable` | switch the Store on or off for all accounts; `disable` leaves already shared applications running and converts each of them back to a private tree on its next npm command that modifies dependencies |
 | `set` | change one setting; `--allowed-registries` accepts exactly one registry URL and requires an empty store |
 | `storage-list` | show or edit the storage directories (one per filesystem that holds account homes) |
 | `exclude-list` | show or edit the accounts that always use plain npm |
 | `prune` | remove store entries no application references; also runs daily from `cl-node-modules-storage-prune.timer`. Reports `removed`, `kept`, `skipped` and `poisoned` entries |
-| `reclaim-staging` | remove staging directories left behind by interrupted installs (see `retained_staging` in `status`); exit code 1 if any of them could not be removed |
+| `reclaim-staging` | attempt to remove abandoned staging directories (see `retained_staging` in `status`); preserve directories protected by migration journals and report removed, skipped and failed entries |
 | `reconcile` | re-validate the storage directories and publish their filesystem identity; runs automatically before the delivery service starts |
 
 Convert an existing application to the Store (dry run first):
@@ -2295,7 +2295,7 @@ cloudlinux-selector migrate --json --interpreter nodejs --user <username> --app-
 ```
 </div>
 
-The dry run validates the application and changes nothing; the real run keeps the previous `node_modules` until the rebuilt application passes its health check and is journaled, so an interrupted conversion is finished or rolled back when the `cl-bun-deliveryd` service starts next. `--skip-web-check` skips the HTTP health check for applications that do not serve web requests.
+The dry run checks eligibility and application health without replacing dependencies. The real run keeps the previous `node_modules` until the rebuilt application passes its health check and records progress for recovery after an interruption. Check the result and migration log before retrying an interrupted conversion. `--skip-web-check` skips the HTTP health check for applications that do not serve web requests.
 
 
 
