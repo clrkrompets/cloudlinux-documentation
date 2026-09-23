@@ -6267,11 +6267,13 @@ Available since <span class="notranslate">LVE Manager 7.11.49-1</span>, the feat
 * CloudLinux OS 7–10 or Ubuntu 22.04; **x86_64 only**.
 * CloudLinux <span class="notranslate">Node.js Selector</span>, on a supported panel or a custom panel that uses its API.
 * `fs.protected_hardlinks = 1`.
-* A storage directory on the same filesystem as each account home that will use the Store. The default store is <span class="notranslate">`/var/lib/cl-node-modules-storage`</span>.
+* A storage directory on the same filesystem as each account home that will use the Store: hardlinks cannot cross filesystems. The default store is <span class="notranslate">`/var/lib/cl-node-modules-storage`</span>.
 
 #### **How the Store works**
 
-When you install dependencies, the Store reuses packages already in its cache and downloads any missing ones. Packages that need extra setup or a build are prepared separately for each application.
+When you install dependencies, the Store reuses packages already in its cache and downloads any missing ones. Packages that need extra setup or a build use private copies prepared for each application.
+
+Shared dependency files are read-only for the account. Use npm to update dependencies.
 
 **Disk space and inode quotas.** Shared dependency files do not count toward the account's disk space or inode quotas. The account's own files and directories, including private dependency copies, still count. Administrators can check Store usage with `cl-node-modules-storage status`.
 
@@ -6380,7 +6382,7 @@ cl-node-modules-storage status
 ```
 </div>
 
-Shows settings, storage usage, and how many accounts and applications use the Store. Read any warnings; `stale` means the usage figures may be incomplete or out of date. With <span class="notranslate">lve-utils 6.6.42-1</span> or later, `cloudlinux-summary` includes some of these metrics as `shared_node_modules_*` fields.
+Shows settings, storage usage, and how many accounts and applications use the Store. Read any warnings; `stale` means the measurement is incomplete and actual usage may be higher. With <span class="notranslate">lve-utils 6.6.42-1</span> or later, `cloudlinux-summary` includes some of these metrics as `shared_node_modules_*` fields.
 
 **Pruning.** Remove cached packages that no application uses:
 
@@ -6391,9 +6393,9 @@ cl-node-modules-storage prune
 ```
 </div>
 
-Cleanup also runs daily. Packages still used by applications are kept.
+Cleanup also runs daily through <span class="notranslate">`cl-node-modules-storage-prune.timer`</span>. Packages still used by applications are kept.
 
-**Shared files.** Use npm to update dependencies. Keep shared files' ownership and permissions unchanged so other applications can continue using them. If `status` reports ownership warnings, check those changes; `prune` does not repair them.
+**Shared files.** Avoid recursive ownership or permission changes (`chown -R`, `chmod -R`) inside shared `node_modules`: they affect other applications using the same files. If `status` reports ownership warnings, check those changes; `prune` does not repair them.
 
 **Logs.** Installs: <span class="notranslate">`/var/log/cloudlinux/bun-delivery.log`</span>. Migrations: <span class="notranslate">`/var/log/cloudlinux/cl-bun-migration.log`</span>. To clean up temporary files left by interrupted installs, run `cl-node-modules-storage reclaim-staging`. Check its result: some files may be kept for recovery.
 
@@ -6414,9 +6416,9 @@ Keep <span class="notranslate">`cl-bun-deliveryd.socket`</span> active: npm need
 
 * **Supported commands:** `cloudlinux-selector install-modules` and `npm install`/`npm i` without extra arguments in the Selector environment. Other commands use regular npm, making shared files private if needed.
 * **Regular npm fallback:** applications with no dependencies, `npm-shrinkwrap.json`, a v1 `package-lock.json`, `workspaces`, `patchedDependencies`, or a symlinked manifest/lockfile. Updating a v1 lockfile requires newer npm; npm 6 keeps the old format.
-* **npm aliases:** supported for packages from the allowed registry. npm 6 cannot install an alias that needs an install script. Use a Selector Node.js version with newer npm, or exclude the account.
-* **Package sources:** one registry per server (default: `https://registry.npmjs.org/`). For Git dependencies, local paths, tarball URLs, or another registry (including a private registry or an `.npmrc` override), use regular npm. Use `cl-node-modules-storage exclude-list --add <username>` for accounts that need them. Changing the registry requires an empty store.
-* **Install scripts:** some applications with optional dependencies may need regular npm because the Store handles these dependencies differently. The administrator can exclude the account to use regular npm.
+* **npm aliases:** supported for packages from the allowed registry. With npm 6 (Node.js 14 and older), a Store install fails for an alias that needs an install script. Select Node.js 16 or newer for the application, or ask the administrator to exclude the account.
+* **Package sources:** one registry per server (default: `https://registry.npmjs.org/`). Git dependencies, local paths, tarball URLs and other registries (including private registries and `.npmrc` overrides) are refused with a reason; there is no automatic fallback to npm. The administrator can run `cl-node-modules-storage exclude-list --add <username>` for accounts that need these sources. Changing the registry requires an empty store.
+* **Install scripts:** if a required install script fails, the Store stops the install and restores the previous dependencies. Some dependencies that npm treats as optional are required by the Store, so their script failures also stop the install. The administrator can exclude the account to use regular npm.
 * **Backups and transfers:** restored dependencies may be private copies and use more disk space and quota. A supported `npm install` can share them again if the destination has the Store enabled.
 
 
