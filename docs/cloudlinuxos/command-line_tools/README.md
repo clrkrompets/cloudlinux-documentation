@@ -2051,6 +2051,20 @@ selectorctl --interpreter=ruby --user=$USER -v 2.0
 
 Below is a list of commands hoster and end user can run in a command line.
 
+**Node.js command exit status**
+
+The following contract applies to lvemanager builds containing the Node.js command exit-status update. Earlier builds can print an error in JSON while returning exit status `0`.
+
+| Command | Exit status |
+| --- | --- |
+| `create`, `destroy` | `0` on success; `1` when the operation fails, such as an existing or nested application root, an unavailable Node.js version, or a missing application. |
+| `install-modules` | `0` on success; nonzero when npm fails, including an E404 for a missing dependency. |
+| `run-script` | The script's exit status: `0` on success and nonzero on failure. A script terminated by a signal returns `128 + signal number`. |
+
+`run-script` requires `--json`; a call without it is rejected with exit status `1`. Its JSON response preserves the Base64-encoded output in `data` and can report `"result": "success"` with a `"warning": "Script exit code: N"` even when the script fails. Check the shell exit status to decide whether a script succeeded; `"result": "success"` alone is insufficient. The same status is returned when root runs the command for an account with `--user`.
+
+This contract covers these commands only. The exit-status update does not cover `start`, `stop`, `restart`, `uninstall-modules`, `read-config` or `save-config`; continue checking their JSON results for errors. Python Selector behavior is also outside this update.
+
 #### **Hoster**
 
 Get information related to Node.js: default version, list of supported versions, status of <span class="notranslate"> Node.js Selector </span> , list of users, their applications, etc:
@@ -2507,7 +2521,7 @@ Run a script from <span class="notranslate"> package.json </span> file of a user
 <div class="notranslate">
 
 ```
-cloudlinux-selector run-script [--json] --interpreter nodejs  [(--user <str> | --domain <str>)] --app-root <str> --script-name <str> [-- <args>...]
+cloudlinux-selector run-script --json --interpreter nodejs  [(--user <str> | --domain <str>)] --app-root <str> --script-name <str> [-- <args>...]
 ```
 </div>
 
@@ -2526,7 +2540,7 @@ cloudlinux-selector run-script --json --interpreter nodejs --user user1 --app-ro
 ```
 {
           "result": "success",
-		  "timestamp": 1508666792.863358
+		  "timestamp": 1508666792.863358,
 		  "data": "script output as Base64 encoded string"
 }
 ```
