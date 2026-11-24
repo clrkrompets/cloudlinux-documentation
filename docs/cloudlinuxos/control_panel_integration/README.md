@@ -1201,9 +1201,19 @@ The following configuration file parameters are used to determine the location o
 * **<span class="notranslate">`base_path`</span>** - directory where file assets are copied for accessibility from the control panel. This is optional if the default directories `/usr/share/l.v.e-manager/commons` and `/usr/share/l.v.e-manager/panelless-version/lvemanager` are accessible from the control panel and correctly configured in the web server. The command `yum update lvemanager` performs file copying or replacement.
 * **<span class="notranslate">`run_service`</span>** - parameter that activates the LVE Manager web server. Set it to 1 during the installation or updating of LVE Manager to run the web server automatically.
 * **<span class="notranslate">`service_port`</span>** - port used for running a web server for access LVE Manager without the control panel (required if `run_service = 1`)
-* **<span class="notranslate">`use_ssl`</span>** - optional parameter that mandates the use of HTTPS for the LVE Manager web server when set to 1.
-* **<span class="notranslate">`ssl_cert`</span>** - conditional parameter that becomes essential when `use_ssl` is activated. Identifies the path to the SSL certificate file for the domain.
-* **<span class="notranslate">`ssl_key`</span>** - conditional parameter that becomes mandatory when `use_ssl` is enabled. Specifies the path to the SSL certificate key file for the domain.
+* **<span class="notranslate">`use_ssl`</span>** - optional parameter that controls HTTPS for the LVE Manager web server. HTTPS is on by default. When set to 0, the web server works without HTTPS and accepts connections only from the server itself (`127.0.0.1`); use this only when a web server on the same host proxies requests to it over HTTPS.
+* **<span class="notranslate">`ssl_cert`</span>** - path to the SSL certificate file for the domain. Required if `run_service = 1`, unless `use_ssl = 0`.
+* **<span class="notranslate">`ssl_key`</span>** - path to the SSL certificate key file for the domain. Required if `run_service = 1`, unless `use_ssl = 0`.
+
+:::tip Note
+Starting from lvemanager 7.11.57-1, the LVE Manager web server uses HTTPS by default:
+
+* if `ssl_cert` or `ssl_key` is not set, the web server (<span class="notranslate">`lvemanager.service`</span>) does not start;
+* with `use_ssl = 0`, the web server is available only on `127.0.0.1`;
+* restart <span class="notranslate">`lvemanager.service`</span> after the certificate is renewed.
+
+In earlier versions, HTTPS was used only when `use_ssl = 1`. If your LVE Manager web server works over HTTP, add `ssl_cert` and `ssl_key` to <span class="notranslate">`/opt/cpvendor/etc/integration.ini`</span> before you update the lvemanager package.
+:::
 
 #### Known issues for GUI unification
 
